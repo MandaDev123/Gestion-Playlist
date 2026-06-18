@@ -14,7 +14,7 @@ import java.util.concurrent.TimeoutException;
 
 public class Programme1Watcher {
 
-    private static final String WATCH_DIR = "C:/Musiques";
+    private static final String WATCH_DIR = "C:\\Users\\HP\\OneDrive\\Documents\\GitHub\\Gestion-Playlist\\Programme-Backend\\Musiques";
     private static final String LOG_FILE = "log_programme1.txt";
     private static final SimpleLogger logger = new SimpleLogger(LOG_FILE);
     private static final Gson gson = new Gson();
@@ -60,28 +60,35 @@ public class Programme1Watcher {
                     Path child = path.resolve(filename);
 
                     if (filename.toString().toLowerCase().endsWith(".mp3")) {
-                        logger.log("Nouveau fichier détecté : " + filename.toString());
+    logger.log("Nouveau fichier détecté : " + filename.toString());
 
-                        // S'assurer que le fichier est bien accessible
-                        try {
-                            if (!Files.isReadable(child)) {
-                                logger.log("Erreur : accès refusé au fichier " + filename.toString());
-                                continue;
-                            }
+    // --- AJOUT : Attendre que le fichier soit complètement écrit ---
+    int tentatives = 0;
+    while (!Files.isReadable(child) && tentatives < 5) {
+        try {
+            logger.log("Fichier en cours d'écriture, attente...");
+            Thread.sleep(500); // Attend 500 millisecondes
+            tentatives++;
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
+    }
 
-                            // Construire le message
-                            Mp3Message message = new Mp3Message(child.toAbsolutePath().toString().replace("\\", "/"));
-                            String jsonMessage = gson.toJson(message);
+    // On vérifie une dernière fois après l'attente
+    if (!Files.isReadable(child)) {
+        logger.log("Erreur : accès toujours refusé au fichier " + filename.toString());
+        continue;
+    }
+    // --------------------------------------------------------------
 
-                            // Envoyer dans RabbitMQ
-                            channel.basicPublish("", RabbitMQUtil.QUEUE_NOUVEAUX_MP3, null, jsonMessage.getBytes());
-                            logger.log("Message envoyé dans RabbitMQ : " + jsonMessage);
+    // Construire le message
+    Mp3Message message = new Mp3Message(child.toAbsolutePath().toString().replace("\\", "/"));
+    String jsonMessage = gson.toJson(message);
 
-                        } catch (Exception e) {
-                            logger.log("Erreur lors du traitement du fichier " + filename.toString() + " : " + e.getMessage());
-                        }
-
-                    } else {
+    // Envoyer dans RabbitMQ
+    channel.basicPublish("", RabbitMQUtil.QUEUE_NOUVEAUX_MP3, null, jsonMessage.getBytes());
+    logger.log("Message envoyé dans RabbitMQ : " + jsonMessage);
+} else {
                         // Ignorer les autres fichiers
                         System.out.println("Fichier ignoré (non mp3) : " + filename.toString());
                     }
