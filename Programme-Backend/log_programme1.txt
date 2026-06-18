@@ -1,0 +1,70 @@
+[03:19:55]
+Dossier créé : C:/Musiques
+[03:19:55]
+Démarrage du Programme 1 (Surveillance)
+[03:19:55]
+Erreur critique : Connection refused: no further information
+[03:23:48]
+Dossier créé : C:\Users\HP\OneDrive\Documents\GitHub\Gestion-Playlist\Programme-Backend\Musiques
+[03:23:48]
+Démarrage du Programme 1 (Surveillance)
+[03:23:49]
+Erreur critique : Connection refused: no further information
+[03:31:00]
+Démarrage du Programme 1 (Surveillance)
+[03:31:00]
+Erreur critique : Connection refused: no further information
+[03:31:47]
+Démarrage du Programme 1 (Surveillance)
+[03:31:47]
+Erreur critique : Connection refused: no further information
+[03:35:12]
+Démarrage du Programme 1 (Surveillance)
+[03:35:13]
+Connecté à RabbitMQ. Surveillance de : C:\Users\HP\OneDrive\Documents\GitHub\Gestion-Playlist\Programme-Backend\Musiques
+[03:40:31]
+Nouveau fichier détecté : Axl_&amp;_Arth_-_Criminal.mp3
+[03:40:31]
+Erreur : accès refusé au fichier Axl_&amp;_Arth_-_Criminal.mp3
+[03:46:34]
+Démarrage du Programme 1 (Surveillance)
+[03:46:34]
+Connecté à RabbitMQ. Surveillance de : C:\Users\HP\OneDrive\Documents\GitHub\Gestion-Playlist\Programme-Backend\Musiques
+[03:47:30]
+Démarrage du Programme 1 (Surveillance)
+[03:47:30]
+Connecté à RabbitMQ. Surveillance de : C:\Users\HP\OneDrive\Documents\GitHub\Gestion-Playlist\Programme-Backend\Musiques
+[03:48:12]
+Démarrage du Programme 1 (Surveillance)
+[03:48:12]
+Connecté à RabbitMQ. Surveillance de : C:\Users\HP\OneDrive\Documents\GitHub\Gestion-Playlist\Programme-Backend\Musiques
+[03:49:07]
+Nouveau fichier détecté : Aled_Edwards_-_All_In_My_Mind_-_Jazz_Dream_Pop.mp3
+[03:49:07]
+Erreur : accès refusé au fichier Aled_Edwards_-_All_In_My_Mind_-_Jazz_Dream_Pop.mp3
+[03:51:11]
+Démarrage du Programme 1 (Surveillance)
+[03:51:11]
+Connecté à RabbitMQ. Surveillance de : C:\Users\HP\OneDrive\Documents\GitHub\Gestion-Playlist\Programme-Backend\Musiques
+[03:51:15]
+Nouveau fichier détecté : Axl_&amp;_Arth_-_Criminal.mp3
+[03:51:15]
+Fichier en cours d'écriture, attente...
+[03:51:16]
+Message envoyé dans RabbitMQ : {"path":"C:/Users/HP/OneDrive/Documents/GitHub/Gestion-Playlist/Programme-Backend/Musiques/Axl_\u0026amp;_Arth_-_Criminal.mp3"}
+[03:52:30]
+Nouveau fichier détecté : Aled_Edwards_-_All_In_My_Mind_-_Jazz_Dream_Pop.mp3
+[03:52:31]
+Fichier en cours d'écriture, attente...
+[03:52:31]
+Message envoyé dans RabbitMQ : {"path":"C:/Users/HP/OneDrive/Documents/GitHub/Gestion-Playlist/Programme-Backend/Musiques/Aled_Edwards_-_All_In_My_Mind_-_Jazz_Dream_Pop.mp3"}
+[04:11:06]
+Nouveau fichier détecté : Alone_-_Color_Out.mp3
+[04:11:06]
+Fichier en cours d'écriture, attente...
+[04:11:07]
+Message envoyé dans RabbitMQ : {"path":"C:/Users/HP/OneDrive/Documents/GitHub/Gestion-Playlist/Programme-Backend/Musiques/Alone_-_Color_Out.mp3"}
+[05:18:06]
+Nouveau fichier détecté : Chocolate_-_Alfonso_Lugo.mp3
+[05:18:06]
+Message envoyé dans RabbitMQ : {"path":"C:/Users/HP/OneDrive/Documents/GitHub/Gestion-Playlist/Programme-Backend/Musiques/Chocolate_-_Alfonso_Lugo.mp3"}
