@@ -9,6 +9,10 @@ public class Mp3MetadataMessage {
     private String year;
     private String comment;
     private long duration; // en secondes
+    private String releaseDate; // ou release_date selon vos préférences de nommage JSON
+private String langue;
+
+// N'oubliez pas d'ajouter les getters et setters correspondants !
 
     public Mp3MetadataMessage() {
     }
@@ -22,6 +26,8 @@ public class Mp3MetadataMessage {
         this.year = year;
         this.comment = comment;
         this.duration = duration;
+        this.releaseDate = null; // Valeur par défaut
+        this.langue = null; // Valeur par défaut
     }
 
     public String getPath() {
@@ -88,6 +94,22 @@ public class Mp3MetadataMessage {
         this.duration = duration;
     }
 
+    public String getReleaseDate() {
+        return releaseDate;
+    }
+
+    public void setReleaseDate(String releaseDate) {
+        this.releaseDate = releaseDate;
+    }
+
+    public String getLangue() {
+        return langue;
+    }
+
+    public void setLangue(String langue) {
+        this.langue = langue;
+    }
+
     @Override
     public String toString() {
         return "Mp3MetadataMessage{" +
@@ -99,6 +121,8 @@ public class Mp3MetadataMessage {
                 ", year='" + year + '\'' +
                 ", comment='" + comment + '\'' +
                 ", duration=" + duration +
+                ", releaseDate='" + releaseDate + '\'' +
+                ", langue='" + langue + '\'' +
                 '}';
     }
 }
