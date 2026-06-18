@@ -1,0 +1,28 @@
+[04:39:39]
+Démarrage du Programme 3 (Intégration API)
+[04:39:39]
+Connecté à RabbitMQ. En attente de messages dans : Queue_Meta_MP3
+[04:39:39]
+Début d'envoi du fichier Axl_&amp;_Arth_-_Criminal.mp3 [Langue: null, Date: null]
+[04:39:40]
+Envoi réussi
+[04:39:40]
+Axl_&amp;_Arth_-_Criminal.mp3 supprimé du répertoire local.
+[04:39:40]
+Début d'envoi du fichier Aled_Edwards_-_All_In_My_Mind_-_Jazz_Dream_Pop.mp3 [Langue: null, Date: null]
+[04:39:40]
+Envoi réussi
+[04:39:40]
+Aled_Edwards_-_All_In_My_Mind_-_Jazz_Dream_Pop.mp3 supprimé du répertoire local.
+[04:39:40]
+Début d'envoi du fichier Alone_-_Color_Out.mp3 [Langue: Inconnue, Date: 2021]
+[04:39:40]
+Envoi réussi
+[04:39:40]
+Alone_-_Color_Out.mp3 supprimé du répertoire local.
+[05:18:07]
+Début d'envoi du fichier Chocolate_-_Alfonso_Lugo.mp3 [Langue: Inconnue, Date: 2021]
+[05:18:07]
+Envoi réussi
+[05:18:07]
+Chocolate_-_Alfonso_Lugo.mp3 supprimé du répertoire local.

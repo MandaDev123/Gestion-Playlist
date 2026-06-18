@@ -1,0 +1,48 @@
+[03:42:18]
+Démarrage du Programme 2 (Extracteur)
+[03:42:18]
+Connecté à RabbitMQ. En attente de messages dans : Queue_Nouveaux_MP3
+[03:47:47]
+Démarrage du Programme 2 (Extracteur)
+[03:47:47]
+Connecté à RabbitMQ. En attente de messages dans : Queue_Nouveaux_MP3
+[03:51:16]
+Extraction effectuée sur Axl_&amp;_Arth_-_Criminal.mp3
+
+Titre : Criminal
+Artiste : Axl &amp; Arth
+Album : Inconnu
+Genre : pop, dance, rnb, edm
+Durée : 205 secondes
+[03:52:31]
+Extraction effectuée sur Aled_Edwards_-_All_In_My_Mind_-_Jazz_Dream_Pop.mp3
+
+Titre : All In My Mind - Jazz Dream Pop
+Artiste : Aled Edwards
+Album : Inconnu
+Genre : dreampop, jazzfusion
+Durée : 244 secondes
+[04:10:49]
+Démarrage du Programme 2 (Extracteur)
+[04:10:49]
+Connecté à RabbitMQ. En attente de messages dans : Queue_Nouveaux_MP3
+[04:11:07]
+Extraction effectuée sur Alone_-_Color_Out.mp3
+
+Titre : Alone
+Artiste : Color Out
+Album : Inconnu
+Genre : poprock
+Langue : Inconnue
+Date de sortie : 2021
+Durée : 245 secondes
+[05:18:07]
+Extraction effectuée sur Chocolate_-_Alfonso_Lugo.mp3
+
+Titre : Chocolate
+Artiste : Alfonso Lugo
+Album : Inconnu
+Genre : Latin
+Langue : Inconnue
+Date de sortie : 2021
+Durée : 189 secondes

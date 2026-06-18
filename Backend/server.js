@@ -1,4 +1,4 @@
-// server.js
+// server.js - TOUT EN HAUT DU FICHIER
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
@@ -6,6 +6,7 @@ const path = require('path');
 const mm = require('music-metadata');
 const db = require('./config/db');
 const upload = require('./middlewares/upload');
+const archiver = require('archiver'); // 4. Instancier l'archive de manière sécurisée
 
 require('dotenv').config();
 
@@ -32,24 +33,34 @@ app.post('/api/songs', upload.single('audio'), async (req, res) => {
     const filePath = req.file.path.replace(/\\/g, '/'); // Normalise le chemin pour le web
     const fileSize = req.file.size;
 
-    // Extraction automatique des métadonnées grâce à music-metadata
-    const metadata = await mm.parseFile(filePath);
+    // Utilisation des métadonnées envoyées par le programme Java via FormData
+    let meta = {};
+    if (req.body.metadata) {
+      try {
+        meta = JSON.parse(req.body.metadata);
+      } catch (e) {
+        console.error("Erreur de parsing des métadonnées JSON :", e);
+      }
+    }
     
-    // Valeurs par défaut si les métadonnées sont vides
-    const title = metadata.common.title || req.file.originalname.replace('.mp3', '');
-    const artist = metadata.common.artist || 'Artiste Inconnu';
-    const album = metadata.common.album || 'Album Inconnu';
-    const genre = metadata.common.genre ? metadata.common.genre[0] : 'Inconnu';
+    // Utilisation des valeurs fournies par Java ou valeurs par défaut
+    const title = (meta.title && meta.title !== "Inconnu") ? meta.title : req.file.originalname.replace('.mp3', '');
+    const artist = meta.artist || 'Artiste Inconnu';
+    const album = meta.album || 'Album Inconnu';
+    const genre = meta.genre || 'Inconnu';
     const language = 'Inconnu'; // Souvent non présent dans les tags ID3 standards
-    const comment = metadata.common.comment ? metadata.common.comment[0] : '';
+    const comment = meta.comment || '';
     
-    // Durée arrondie en secondes (essentiel pour tes futurs calculs)
-    const duration = metadata.format.duration ? Math.round(metadata.format.duration) : 0;
+    // Durée en secondes
+    const duration = meta.duration || 0;
     
     // Date de sortie
     let releaseDate = null;
-    if (metadata.common.year) {
-      releaseDate = `${metadata.common.year}-01-01`; // Format DATE valide pour Postgres
+    if (meta.year && meta.year !== "Inconnue") {
+      const yearMatch = String(meta.year).match(/\d{4}/);
+      if (yearMatch) {
+        releaseDate = `${yearMatch[0]}-01-01`; // Format DATE valide pour Postgres
+      }
     }
 
     // Insertion en base de données
@@ -74,6 +85,16 @@ app.post('/api/songs', upload.single('audio'), async (req, res) => {
 app.get('/api/songs', async (req, res) => {
   try {
     const result = await db.query('SELECT * FROM songs ORDER BY created_at DESC');
+    res.json(result.rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Erreur lors de la récupération des morceaux." });
+  }
+});
+
+app.get('/api/playlists', async (req, res) => {
+  try {
+    const result = await db.query('SELECT * FROM playlists ORDER BY created_at DESC');
     res.json(result.rows);
   } catch (error) {
     console.error(error);
@@ -137,10 +158,11 @@ app.delete('/api/songs/:id', async (req, res) => {
 });
 
 // POST /api/playlists/generate -> Génère une playlist temporaire selon des critères
+// server.js (Route de génération modifiée)
 app.post('/api/playlists/generate', async (req, res) => {
-  const { genre, artist, album, language, year, target_duration } = req.body;
+  // Récupération des nouveaux critères
+  const { genres, artist, album, language, yearMin, yearMax, target_duration } = req.body;
 
-  // target_duration doit être convertie en secondes côté frontend (ex: 1h = 3600)
   if (!target_duration || target_duration <= 0) {
     return res.status(400).json({ error: "Une durée totale souhaitée est requise." });
   }
@@ -150,64 +172,68 @@ app.post('/api/playlists/generate', async (req, res) => {
     const queryParams = [];
     let paramIndex = 1;
 
-    // Construction dynamique de la clause WHERE selon les critères fournis
-    if (genre) {
-      queryText += ` AND genre = $${paramIndex}`;
-      queryParams.push(genre);
-      paramIndex++;
+    // 1. Gestion du multi-genre avec l'opérateur SQL "IN"
+    if (genres && Array.isArray(genres) && genres.length > 0) {
+      // Crée une chaîne de placeholders comme ($1, $2, $3)
+      const placeholders = genres.map(() => `$${paramIndex++}`).join(', ');
+      queryText += ` AND genre IN (${placeholders})`;
+      queryParams.push(...genres);
     }
+
     if (artist) {
       queryText += ` AND artist = $${paramIndex}`;
       queryParams.push(artist);
       paramIndex++;
     }
+    
     if (album) {
       queryText += ` AND album = $${paramIndex}`;
       queryParams.push(album);
       paramIndex++;
     }
+    
     if (language) {
       queryText += ` AND language = $${paramIndex}`;
       queryParams.push(language);
       paramIndex++;
     }
-    if (year) {
-      // Extrait l'année de la colonne release_date
-      queryText += ` AND EXTRACT(YEAR FROM release_date) = $${paramIndex}`;
-      queryParams.push(parseInt(year));
+
+    // 2. Gestion de la plage de dates (Année Min / Max)
+    if (yearMin) {
+      queryText += ` AND EXTRACT(YEAR FROM release_date) >= $${paramIndex}`;
+      queryParams.push(parseInt(yearMin));
+      paramIndex++;
+    }
+    
+    if (yearMax) {
+      queryText += ` AND EXTRACT(YEAR FROM release_date) <= $${paramIndex}`;
+      queryParams.push(parseInt(yearMax));
       paramIndex++;
     }
 
-    // Mélanger aléatoirement les morceaux correspondants directement via PostgreSQL
+    // Mélange aléatoire
     queryText += ' ORDER BY RANDOM()';
 
-    // Exécution de la recherche
+    // Exécution de la requête PostgreSQL
     const dbResult = await db.query(queryText, queryParams);
     const availableSongs = dbResult.rows;
 
-    // ---- ALGORITHME DE SÉLECTION SELON LA DURÉE ----
+    // Algorithme de sélection selon la durée (Approche stricte inchangée)
     const generatedPlaylist = [];
     let currentTotalDuration = 0;
 
     for (const song of availableSongs) {
-      // Si l'ajout du morceau dépasse la durée cible, on vérifie si on est déjà proche du but
       if (currentTotalDuration + song.duration > target_duration) {
-        // Optionnel : On peut accepter le morceau si cela nous rapproche plus de la cible
-        // que de s'arrêter net (ex: s'il manque 30s et que le morceau fait 40s).
-        // Ici, on choisit une approche stricte : on ne dépasse pas la limite fixée.
         continue; 
       }
-
       generatedPlaylist.push(song);
       currentTotalDuration += song.duration;
 
-      // Si on a atteint pile la durée, on peut stopper la boucle
       if (currentTotalDuration === target_duration) {
         break;
       }
     }
 
-    // On renvoie la playlist générée ET les critères originaux (pour que le front puisse les afficher ou les stocker)
     res.json({
       meta: {
         total_songs: generatedPlaylist.length,
@@ -326,8 +352,7 @@ app.get('/api/songs/:id/stream', async (req, res) => {
   }
 });
 
-const archiver = require('archiver');
-
+// const archiver = require('archiver');
 // GET /api/playlists/:id/download -> Télécharger une playlist complète au format ZIP
 app.get('/api/playlists/:id/download', async (req, res) => {
   const { id } = req.params;
@@ -339,7 +364,7 @@ app.get('/api/playlists/:id/download', async (req, res) => {
       return res.status(404).json({ error: "Playlist introuvable." });
     }
     
-    // Normalisation du nom de fichier pour le ZIP (ex: "Playlist Relax")
+    // Normalisation du nom de fichier pour le ZIP
     const playlistName = playlistResult.rows[0].name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
 
     // 2. Récupérer la liste des morceaux associés ordonnés par leur position
@@ -361,38 +386,55 @@ app.get('/api/playlists/:id/download', async (req, res) => {
     res.attachment(`${playlistName}.zip`);
     res.setHeader('Content-Type', 'application/zip');
 
-    // 4. Initialiser le processus de compression d'archiver
-    const archive = archiver('zip', {
-      zlib: { level: 5 } // Niveau de compression intermédiaire (rapide et efficace)
+    // 4. Initialiser le processus de compression d'archiver selon sa structure ESM détectée
+    let archive;
+    if (archiver && archiver.ZipArchive) {
+      // Cas détecté dans vos logs : instanciation de la classe ZipArchive exposée
+      archive = new archiver.ZipArchive({ zlib: { level: 5 } });
+    } else if (typeof archiver === 'function') {
+      // Cas standard classique (Secours)
+      archive = archiver('zip', { zlib: { level: 5 } });
+    } else if (archiver && typeof archiver.create === 'function') {
+      // Autre format usine standard (Secours)
+      archive = archiver.create('zip', { zlib: { level: 5 } });
+    } else {
+      throw new TypeError("Impossible d'initialiser le module 'archiver' avec la structure détectée.");
+    }
+
+    // Écouter les erreurs potentielles d'archiver
+    archive.on('error', (err) => {
+      console.error("Erreur Archiver:", err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: "Erreur lors de la création du ZIP" });
+      }
+    });
+
+    // Événement une fois que toutes les données ont été envoyées à la réponse
+    res.on('finish', () => {
+      console.log(`Téléchargement du ZIP terminé avec succès pour la playlist ID: ${id}`);
     });
 
     // Rediriger le flux de l'archive directement vers la réponse HTTP
     archive.pipe(res);
 
-    // Écouter les erreurs potentielles d'archiver
-    archive.on('error', (err) => {
-      throw err;
-    });
-
     // 5. Ajouter chaque fichier MP3 à l'archive
     songs.forEach((song, index) => {
       if (fs.existsSync(song.file_path)) {
-        // Optionnel : renommer proprement le fichier à l'intérieur du ZIP
-        // Exemple : "01 - Titre - Artiste.mp3" au lieu du nom barbare de Multer
         const cleanTitle = song.title.replace(/[^a-z0-9]/gi, '_');
         const cleanArtist = song.artist ? song.artist.replace(/[^a-z0-9]/gi, '_') : 'Inconnu';
         const zipFileName = `${String(index + 1).padStart(2, '0')}-${cleanTitle}-${cleanArtist}.mp3`;
 
         archive.file(song.file_path, { name: zipFileName });
+      } else {
+        console.warn(`Fichier manquant sur le serveur : ${song.file_path}`);
       }
     });
 
-    // 6. Finaliser l'archive (ferme le flux et déclenche le téléchargement côté client)
-    await archive.finalize();
+    // 6. Finaliser l'archive 
+    archive.finalize();
 
   } catch (error) {
     console.error("Erreur lors de la génération du ZIP :", error);
-    // On ne peut pas envoyer un JSON d'erreur si les headers de téléchargement ont déjà été envoyés
     if (!res.headersSent) {
       res.status(500).json({ error: "Erreur serveur lors de la création du fichier ZIP." });
     }
@@ -432,6 +474,109 @@ app.get('/api/playlists/user/:userId', async (req, res) => {
   } catch (error) {
     console.error("Erreur lors de la récupération des playlists :", error);
     res.status(500).json({ error: "Erreur serveur lors de la récupération des playlists." });
+  }
+});
+
+// DELETE /api/playlists/:id -> Supprimer définitivement une playlist et ses liaisons
+app.delete('/api/playlists/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    // Début d'une transaction pour garantir la suppression propre de tout le bloc
+    await db.query('BEGIN');
+
+    // 1. Supprimer d'abord les associations dans la table de liaison playlist_songs
+    await db.query('DELETE FROM playlist_songs WHERE playlist_id = $1', [id]);
+
+    // 2. Supprimer la playlist dans la table playlists
+    const result = await db.query('DELETE FROM playlists WHERE id = $1 RETURNING *', [id]);
+
+    if (result.rows.length === 0) {
+      await db.query('ROLLBACK');
+      return res.status(404).json({ error: "Playlist introuvable." });
+    }
+
+    await db.query('COMMIT');
+    res.json({ message: "Playlist supprimée avec succès !" });
+
+  } catch (error) {
+    await db.query('ROLLBACK');
+    console.error("Erreur lors de la suppression de la playlist :", error);
+    res.status(500).json({ error: "Erreur serveur lors de la suppression." });
+  }
+});
+
+
+
+// ==========================================
+// NOUVELLES ROUTES : GESTION DES MORCEAUX DANS UNE PLAYLIST
+// ==========================================
+
+// 1. Ajouter un morceau à une playlist existante
+app.post('/api/playlists/:id/songs', async (req, res) => {
+  const { id } = req.params; // ID de la playlist
+  const { song_id } = req.body;
+
+  if (!song_id) {
+    return res.status(400).json({ error: "L'ID de la chanson est requis." });
+  }
+
+  try {
+    // Optionnel : vérifier si la chanson est déjà dans la playlist pour éviter les doublons stricts
+    const checkDuplicate = await db.query(
+      'SELECT * FROM playlist_songs WHERE playlist_id = $1 AND song_id = $2',
+      [id, song_id]
+    );
+    if (checkDuplicate.rows.length > 0) {
+      return res.status(400).json({ error: "Ce morceau est déjà dans la playlist." });
+    }
+
+    // Récupérer la dernière position pour insérer à la suite
+    const posResult = await db.query(
+      'SELECT COUNT(*) FROM playlist_songs WHERE playlist_id = $1',
+      [id]
+    );
+    const position = parseInt(posResult.rows[0].count, 10);
+
+    // Insérer dans la table de liaison
+    const insertQuery = `
+      INSERT INTO playlist_songs (playlist_id, song_id, position)
+      VALUES ($1, $2, $3)
+      RETURNING *;
+    `;
+    await db.query(insertQuery, [id, song_id, position]);
+
+    // Récupérer les infos complètes du morceau pour les renvoyer au front-end
+    const songInfo = await db.query('SELECT * FROM songs WHERE id = $1', [song_id]);
+
+    res.status(201).json({
+      message: "Morceau ajouté à la playlist avec succès !",
+      song: songInfo.rows[0]
+    });
+  } catch (error) {
+    console.error("Erreur lors de l'ajout du morceau à la playlist :", error);
+    res.status(500).json({ error: "Erreur serveur lors de l'ajout." });
+  }
+});
+
+// 2. Retirer un morceau d'une playlist (sans supprimer la chanson de la BDD générale)
+app.delete('/api/playlists/:id/songs/:songId', async (req, res) => {
+  const { id, songId } = req.params;
+
+  try {
+    const result = await db.query(
+      'DELETE FROM playlist_songs WHERE playlist_id = $1 AND song_id = $2 RETURNING *',
+      [id, songId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Ce morceau ne fait pas partie de cette playlist." });
+    }
+
+    res.json({ message: "Morceau retiré de la playlist avec succès !" });
+  } catch (error) {
+    console.error("Erreur lors du retrait du morceau de la playlist :", error);
+    res.status(500).json({ error: "Erreur serveur lors du retrait." });
   }
 });
 

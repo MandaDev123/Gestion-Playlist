@@ -24,7 +24,7 @@ public class Programme3Uploader {
     private static final String LOG_FILE = "log_programme3.txt";
     private static final SimpleLogger logger = new SimpleLogger(LOG_FILE);
     private static final Gson gson = new Gson();
-    private static final String API_URL = "http://localhost:8080/api/mp3/upload";
+    private static final String API_URL = "http://localhost:5000/api/songs";
     private static final HttpClient httpClient = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
 
     public static void main(String[] args) {
@@ -37,6 +37,8 @@ public class Programme3Uploader {
             RabbitMQUtil.declareQueues(channel);
             logger.log("Connecté à RabbitMQ. En attente de messages dans : " + RabbitMQUtil.QUEUE_META_MP3);
 
+            // Dans Programme3Uploader.java, modifiez la section de log dans le
+            // deliverCallback :
             DeliverCallback deliverCallback = (consumerTag, delivery) -> {
                 String messageJson = new String(delivery.getBody(), StandardCharsets.UTF_8);
 
@@ -50,7 +52,10 @@ public class Programme3Uploader {
                         return;
                     }
 
-                    logger.log("Début d'envoi du fichier " + file.getName());
+                    // MISE À JOUR LOG : Affiche également la langue et la date de sortie transmises
+                    logger.log("Début d'envoi du fichier " + file.getName() +
+                            " [Langue: " + metaMsg.getLangue() +
+                            ", Date: " + metaMsg.getReleaseDate() + "]");
 
                     // Multipart request building
                     String boundary = "---" + UUID.randomUUID().toString();
@@ -66,20 +71,16 @@ public class Programme3Uploader {
 
                     if (response.statusCode() >= 200 && response.statusCode() < 300) {
                         logger.log("Envoi réussi");
-                        // Nettoyage
                         Files.deleteIfExists(file.toPath());
                         logger.log(file.getName() + " supprimé du répertoire local.");
-                        // Ack the message only if successful
                         channel.basicAck(delivery.getEnvelope().getDeliveryTag(), false);
                     } else {
                         logger.log("Échec de l'envoi : statut HTTP " + response.statusCode());
-                        // Nack and requeue so it can be retried later
                         channel.basicNack(delivery.getEnvelope().getDeliveryTag(), false, true);
                     }
 
                 } catch (Exception e) {
                     logger.log("Échec de l'envoi : serveur inaccessible ou erreur (" + e.getMessage() + ")");
-                    // Nack and requeue
                     try {
                         channel.basicNack(delivery.getEnvelope().getDeliveryTag(), false, true);
                     } catch (IOException ioException) {
@@ -88,7 +89,8 @@ public class Programme3Uploader {
                 }
             };
 
-            channel.basicConsume(RabbitMQUtil.QUEUE_META_MP3, false, deliverCallback, consumerTag -> { });
+            channel.basicConsume(RabbitMQUtil.QUEUE_META_MP3, false, deliverCallback, consumerTag -> {
+            });
 
         } catch (Exception e) {
             logger.log("Erreur critique : " + e.getMessage());
@@ -96,7 +98,8 @@ public class Programme3Uploader {
         }
     }
 
-    private static byte[] buildMultipartBody(Mp3MetadataMessage metaMsg, File file, String boundary) throws IOException {
+    private static byte[] buildMultipartBody(Mp3MetadataMessage metaMsg, File file, String boundary)
+            throws IOException {
         StringBuilder sb = new StringBuilder();
 
         // Ajouter les métadonnées (json)
@@ -107,7 +110,7 @@ public class Programme3Uploader {
 
         // Ajouter le fichier
         sb.append("--").append(boundary).append("\r\n");
-        sb.append("Content-Disposition: form-data; name=\"file\"; filename=\"").append(file.getName()).append("\"\r\n");
+        sb.append("Content-Disposition: form-data; name=\"audio\"; filename=\"").append(file.getName()).append("\"\r\n");
         sb.append("Content-Type: audio/mpeg\r\n\r\n");
 
         byte[] headerBytes = sb.toString().getBytes(StandardCharsets.UTF_8);
