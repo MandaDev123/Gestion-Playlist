@@ -7,6 +7,9 @@ const mm = require('music-metadata');
 const db = require('./config/db');
 const upload = require('./middlewares/upload');
 const archiver = require('archiver'); // 4. Instancier l'archive de manière sécurisée
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const { authMiddleware, JWT_SECRET } = require('./middlewares/auth');
 
 require('dotenv').config();
 
@@ -18,6 +21,94 @@ app.use(cors());
 app.use(express.json());
 // Permet de rendre le dossier uploads public pour que React puisse lire les fichiers audio
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// ==========================================
+// ROUTES API (AUTHENTIFICATION)
+// ==========================================
+
+// POST /api/auth/register -> Créer un compte utilisateur
+app.post('/api/auth/register', async (req, res) => {
+  const { username, email, password } = req.body;
+
+  if (!username || !email || !password) {
+    return res.status(400).json({ error: "Nom d'utilisateur, email et mot de passe requis." });
+  }
+  if (password.length < 6) {
+    return res.status(400).json({ error: "Le mot de passe doit contenir au moins 6 caractères." });
+  }
+
+  try {
+    const existing = await db.query(
+      'SELECT id FROM users WHERE email = $1 OR username = $2',
+      [email, username]
+    );
+    if (existing.rows.length > 0) {
+      return res.status(409).json({ error: "Un compte existe déjà avec cet email ou ce nom d'utilisateur." });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    const result = await db.query(
+      'INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id, username, email',
+      [username, email, passwordHash]
+    );
+    const user = result.rows[0];
+
+    const token = jwt.sign({ id: user.id, username: user.username }, JWT_SECRET, { expiresIn: '7d' });
+
+    res.status(201).json({ message: "Compte créé avec succès !", token, user });
+  } catch (error) {
+    console.error("Erreur lors de l'inscription :", error);
+    res.status(500).json({ error: "Erreur serveur lors de l'inscription." });
+  }
+});
+
+// POST /api/auth/login -> Connexion
+app.post('/api/auth/login', async (req, res) => {
+  const { email, password } = req.body;
+
+  if (!email || !password) {
+    return res.status(400).json({ error: "Email et mot de passe requis." });
+  }
+
+  try {
+    const result = await db.query('SELECT * FROM users WHERE email = $1', [email]);
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: "Email ou mot de passe incorrect." });
+    }
+
+    const user = result.rows[0];
+    const match = await bcrypt.compare(password, user.password_hash);
+    if (!match) {
+      return res.status(401).json({ error: "Email ou mot de passe incorrect." });
+    }
+
+    const token = jwt.sign({ id: user.id, username: user.username }, JWT_SECRET, { expiresIn: '7d' });
+
+    res.json({
+      message: "Connexion réussie !",
+      token,
+      user: { id: user.id, username: user.username, email: user.email }
+    });
+  } catch (error) {
+    console.error("Erreur lors de la connexion :", error);
+    res.status(500).json({ error: "Erreur serveur lors de la connexion." });
+  }
+});
+
+// GET /api/auth/me -> Vérifie le token et renvoie l'utilisateur courant (utile au rechargement de page)
+app.get('/api/auth/me', authMiddleware, async (req, res) => {
+  try {
+    const result = await db.query('SELECT id, username, email FROM users WHERE id = $1', [req.user.id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Utilisateur introuvable." });
+    }
+    res.json({ user: result.rows[0] });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Erreur serveur." });
+  }
+});
 
 // ==========================================
 // ROUTES API (CRUD - SONGS)
@@ -89,6 +180,26 @@ app.get('/api/songs', async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Erreur lors de la récupération des morceaux." });
+  }
+});
+
+// GET /api/songs/genres -> Récupérer la liste des genres distincts réellement présents en base
+// (utilisé pour peupler dynamiquement le formulaire de génération de playlist)
+app.get('/api/songs/genres', async (req, res) => {
+  try {
+    // Certaines chansons ont plusieurs genres dans une seule chaîne (ex: "filmscore, trailer").
+    // On les sépare avec unnest(string_to_array(...)) pour obtenir des genres individuels et uniques.
+    const result = await db.query(
+      `SELECT DISTINCT TRIM(genre_part) AS genre
+       FROM songs, LATERAL unnest(string_to_array(genre, ',')) AS genre_part
+       WHERE genre IS NOT NULL AND TRIM(genre_part) != ''
+       ORDER BY genre ASC`
+    );
+    const genres = result.rows.map(row => row.genre);
+    res.json(genres);
+  } catch (error) {
+    console.error("Erreur lors de la récupération des genres :", error);
+    res.status(500).json({ error: "Erreur serveur lors de la récupération des genres." });
   }
 });
 
@@ -172,12 +283,16 @@ app.post('/api/playlists/generate', async (req, res) => {
     const queryParams = [];
     let paramIndex = 1;
 
-    // 1. Gestion du multi-genre avec l'opérateur SQL "IN"
+    // 1. Gestion du multi-genre : une chanson peut avoir plusieurs genres dans une seule
+    // chaîne (ex: "filmscore, trailer"), donc on découpe cette chaîne et on vérifie si
+    // au moins un des genres sélectionnés par l'utilisateur s'y trouve.
     if (genres && Array.isArray(genres) && genres.length > 0) {
-      // Crée une chaîne de placeholders comme ($1, $2, $3)
-      const placeholders = genres.map(() => `$${paramIndex++}`).join(', ');
-      queryText += ` AND genre IN (${placeholders})`;
-      queryParams.push(...genres);
+      queryText += ` AND EXISTS (
+        SELECT 1 FROM unnest(string_to_array(songs.genre, ',')) AS g(genre_value)
+        WHERE TRIM(g.genre_value) = ANY($${paramIndex})
+      )`;
+      queryParams.push(genres);
+      paramIndex++;
     }
 
     if (artist) {
@@ -250,10 +365,11 @@ app.post('/api/playlists/generate', async (req, res) => {
 });
 
 // POST /api/playlists -> Sauvegarder définitivement une playlist validée
-app.post('/api/playlists', async (req, res) => {
-  const { name, user_id, is_generated, generation_criteria, song_ids } = req.body;
+app.post('/api/playlists', authMiddleware, async (req, res) => {
+  const { name, is_generated, generation_criteria, song_ids } = req.body;
+  const user_id = req.user.id; // On ne fait plus confiance au user_id envoyé par le client
 
-  if (!name || !user_id || !song_ids || !Array.isArray(song_ids)) {
+  if (!name || !song_ids || !Array.isArray(song_ids)) {
     return res.status(400).json({ error: "Données de playlist incomplètes ou invalides." });
   }
 
@@ -441,9 +557,9 @@ app.get('/api/playlists/:id/download', async (req, res) => {
   }
 });
 
-// GET /api/playlists/user/:userId -> Récupérer toutes les playlists d'un utilisateur avec leurs morceaux
-app.get('/api/playlists/user/:userId', async (req, res) => {
-  const { userId } = req.params;
+// GET /api/playlists/mine -> Récupérer toutes les playlists de l'utilisateur connecté avec leurs morceaux
+app.get('/api/playlists/mine', authMiddleware, async (req, res) => {
+  const userId = req.user.id;
 
   try {
     // 1. Récupérer les playlists de l'utilisateur
@@ -478,10 +594,19 @@ app.get('/api/playlists/user/:userId', async (req, res) => {
 });
 
 // DELETE /api/playlists/:id -> Supprimer définitivement une playlist et ses liaisons
-app.delete('/api/playlists/:id', async (req, res) => {
+app.delete('/api/playlists/:id', authMiddleware, async (req, res) => {
   const { id } = req.params;
 
   try {
+    // Vérifie que la playlist appartient bien à l'utilisateur connecté
+    const ownerCheck = await db.query('SELECT user_id FROM playlists WHERE id = $1', [id]);
+    if (ownerCheck.rows.length === 0) {
+      return res.status(404).json({ error: "Playlist introuvable." });
+    }
+    if (ownerCheck.rows[0].user_id !== req.user.id) {
+      return res.status(403).json({ error: "Vous n'êtes pas autorisé à supprimer cette playlist." });
+    }
+
     // Début d'une transaction pour garantir la suppression propre de tout le bloc
     await db.query('BEGIN');
 
@@ -513,7 +638,7 @@ app.delete('/api/playlists/:id', async (req, res) => {
 // ==========================================
 
 // 1. Ajouter un morceau à une playlist existante
-app.post('/api/playlists/:id/songs', async (req, res) => {
+app.post('/api/playlists/:id/songs', authMiddleware, async (req, res) => {
   const { id } = req.params; // ID de la playlist
   const { song_id } = req.body;
 
@@ -560,7 +685,7 @@ app.post('/api/playlists/:id/songs', async (req, res) => {
 });
 
 // 2. Retirer un morceau d'une playlist (sans supprimer la chanson de la BDD générale)
-app.delete('/api/playlists/:id/songs/:songId', async (req, res) => {
+app.delete('/api/playlists/:id/songs/:songId', authMiddleware, async (req, res) => {
   const { id, songId } = req.params;
 
   try {
@@ -577,6 +702,59 @@ app.delete('/api/playlists/:id/songs/:songId', async (req, res) => {
   } catch (error) {
     console.error("Erreur lors du retrait du morceau de la playlist :", error);
     res.status(500).json({ error: "Erreur serveur lors du retrait." });
+  }
+});
+
+// POST /api/playlists/merge -> Fusionner plusieurs playlists en une nouvelle
+app.post('/api/playlists/merge', authMiddleware, async (req, res) => {
+  const { name, playlist_ids } = req.body;
+  const user_id = req.user.id; // On ne fait plus confiance au user_id envoyé par le client
+
+  if (!name || !playlist_ids || playlist_ids.length < 2) {
+    return res.status(400).json({ error: "Nom et au moins 2 playlists requis pour la fusion." });
+  }
+
+  try {
+    // Vérifie que toutes les playlists sélectionnées appartiennent bien à l'utilisateur connecté
+    const ownershipCheck = await db.query(
+      'SELECT id FROM playlists WHERE id = ANY($1) AND user_id != $2',
+      [playlist_ids, user_id]
+    );
+    if (ownershipCheck.rows.length > 0) {
+      return res.status(403).json({ error: "Vous ne pouvez fusionner que vos propres playlists." });
+    }
+
+    await db.query('BEGIN');
+
+    // 1. Récupérer tous les IDs de chansons uniques des playlists sélectionnées
+    const songsQuery = `
+      SELECT DISTINCT song_id 
+      FROM playlist_songs 
+      WHERE playlist_id = ANY($1)
+    `;
+    const songsResult = await db.query(songsQuery, [playlist_ids]);
+    const songIds = songsResult.rows.map(row => row.song_id);
+
+    // 2. Créer la nouvelle playlist
+    const newPlaylist = await db.query(
+      'INSERT INTO playlists (name, user_id, is_generated) VALUES ($1, $2, false) RETURNING id',
+      [name, user_id]
+    );
+    const newPlaylistId = newPlaylist.rows[0].id;
+
+    // 3. Ajouter les chansons uniques
+    for (let i = 0; i < songIds.length; i++) {
+      await db.query(
+        'INSERT INTO playlist_songs (playlist_id, song_id, position) VALUES ($1, $2, $3)',
+        [newPlaylistId, songIds[i], i]
+      );
+    }
+
+    await db.query('COMMIT');
+    res.status(201).json({ message: "Fusion réussie !", newPlaylistId });
+  } catch (error) {
+    await db.query('ROLLBACK');
+    res.status(500).json({ error: "Erreur lors de la fusion." });
   }
 });
 
