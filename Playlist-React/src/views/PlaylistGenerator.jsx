@@ -1,8 +1,31 @@
-import  { useState, useContext } from 'react';
+import  { useState, useEffect, useContext } from 'react';
 import { AudioContext } from '../context/AudioContext';
+import { AuthContext } from '../context/AuthContext';
 
 export default function PlaylistGenerator() {
   const { playSong } = useContext(AudioContext);
+  const { authFetch } = useContext(AuthContext);
+
+  // Genres disponibles, chargés dynamiquement depuis la bibliothèque réelle
+  const [availableGenres, setAvailableGenres] = useState([]);
+  const [genresLoading, setGenresLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchGenres = async () => {
+      try {
+        const res = await authFetch('http://localhost:5000/api/songs/genres');
+        const data = await res.json();
+        if (res.ok) {
+          setAvailableGenres(data);
+        }
+      } catch (err) {
+        console.error("Erreur lors du chargement des genres", err);
+      } finally {
+        setGenresLoading(false);
+      }
+    };
+    fetchGenres();
+  }, []);
 
   // États pour les critères du formulaire mis à jour
   const [criteria, setCriteria] = useState({
@@ -51,7 +74,7 @@ export default function PlaylistGenerator() {
     delete bodyData.targetDurationMinutes; 
 
     try {
-      const res = await fetch('http://localhost:5000/api/playlists/generate', {
+      const res = await authFetch('http://localhost:5000/api/playlists/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(bodyData)
@@ -105,14 +128,13 @@ export default function PlaylistGenerator() {
 
     const payload = {
       name: playlistName,
-      user_id: 1, 
       is_generated: true,
       generation_criteria: criteria,
       song_ids: generatedSongs.map(song => song.id) 
     };
 
     try {
-      const res = await fetch('http://localhost:5000/api/playlists', {
+      const res = await authFetch('http://localhost:5000/api/playlists', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -143,20 +165,23 @@ export default function PlaylistGenerator() {
           {/* Liste déroulante MULTIPLE pour le Genre */}
           <div style={styles.formGroup}>
             <label style={styles.label}>Genre(s) Musical(aux) : <small style={styles.helpText}>(Ctrl / Cmd + Clic)</small></label>
-            <select 
-              name="genres" 
-              multiple 
-              value={criteria.genres} 
-              onChange={handleChange} 
-              style={styles.selectMultiple}
-            >
-              <option value="Pop">Pop</option>
-              <option value="Rock">Rock</option>
-              <option value="Disco-Funk">Disco-Funk</option>
-              <option value="Jazz">Jazz</option>
-              <option value="Classique">Classique</option>
-              <option value="Inconnu">Inconnu</option>
-            </select>
+            {genresLoading ? (
+              <p style={styles.helpText}>Chargement des genres...</p>
+            ) : availableGenres.length === 0 ? (
+              <p style={styles.helpText}>Aucun genre trouvé dans ta bibliothèque.</p>
+            ) : (
+              <select 
+                name="genres" 
+                multiple 
+                value={criteria.genres} 
+                onChange={handleChange} 
+                style={styles.selectMultiple}
+              >
+                {availableGenres.map((genre) => (
+                  <option key={genre} value={genre}>{genre}</option>
+                ))}
+              </select>
+            )}
           </div>
 
           <div style={styles.formGroup}>

@@ -27,32 +27,44 @@ import java.util.UUID;
 
 public class Programme3Uploader {
 
-    private static final String LOG_FILE = "log_programme3.txt";
-    private static final SimpleLogger logger = new SimpleLogger(LOG_FILE);
-    private static final Gson gson = new Gson();
-    private static final String API_URL = "http://localhost:5000/api/songs";
-    private static final HttpClient httpClient = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
+    private static final String LOG_FILE            = "log_programme3.txt";
+    private static final SimpleLogger logger        = new SimpleLogger(LOG_FILE);
+    private static final Gson gson                  = new Gson();
+    private static final String API_URL             = "http://localhost:5000/api/songs";
+    private static final HttpClient httpClient      = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
 
-    // Listes noires stockées en mémoire (comparaison normalisée)
-    private static final Set<String> blacklistedGenres = new HashSet<>();
-    private static final Set<String> blacklistedArtists = new HashSet<>();
-    private static final String BLACKLIST_FILE = "C:\\Users\\HP\\OneDrive\\Documents\\GitHub\\Gestion-Playlist\\blacklist.txt";
+    private static final String BLACKLIST_FILE      = "C:\\Users\\HP\\OneDrive\\Documents\\GitHub\\Gestion-Playlist\\blacklist.txt";
+    private static final String DURATION_LIMIT_FILE = "C:\\Users\\HP\\OneDrive\\Documents\\GitHub\\Gestion-Playlist\\duration_limit.txt";
 
-    // Timestamp du dernier chargement de la blacklist (pour rechargement automatique)
-    private static long lastBlacklistLoadTime = 0;
+    // Listes noires
+    private static final Set<String> blacklistedGenres   = new HashSet<>();
+    private static final Set<String> blacklistedArtists  = new HashSet<>();
+
+    // Durée maximale autorisée (en secondes). -1 = pas de limite.
+    private static long maxDurationSeconds = -1;
+
+    // Timestamps de dernier chargement pour rechargement automatique
+    private static long lastBlacklistLoadTime  = 0;
+    private static long lastDurationLoadTime   = 0;
 
     public static void main(String[] args) {
-        logger.log("Démarrage du Programme 3 (Intégration API)");
+        logger.log("Demarrage du Programme 3 (Integration API)");
 
-        // Chargement initial de la blacklist au démarrage
+        // Diagnostic chemin blacklist au demarrage
+        logger.log("Chemin blacklist      : " + Paths.get(BLACKLIST_FILE).toAbsolutePath());
+        logger.log("Fichier blacklist OK  : " + Files.exists(Paths.get(BLACKLIST_FILE)));
+        logger.log("Chemin duree          : " + Paths.get(DURATION_LIMIT_FILE).toAbsolutePath());
+        logger.log("Fichier duree OK      : " + Files.exists(Paths.get(DURATION_LIMIT_FILE)));
+
         loadBlacklist();
+        loadDurationLimit();
 
         try {
             Connection connection = RabbitMQUtil.createConnection();
             Channel channel = connection.createChannel();
 
             RabbitMQUtil.declareQueues(channel);
-            logger.log("Connecté à RabbitMQ. En attente de messages dans : " + RabbitMQUtil.QUEUE_META_MP3);
+            logger.log("Connecte a RabbitMQ. En attente de messages dans : " + RabbitMQUtil.QUEUE_META_MP3);
 
             DeliverCallback deliverCallback = (consumerTag, delivery) -> {
                 String messageJson = new String(delivery.getBody(), StandardCharsets.UTF_8);
@@ -61,8 +73,9 @@ public class Programme3Uploader {
                     Mp3MetadataMessage metaMsg = gson.fromJson(messageJson, Mp3MetadataMessage.class);
                     File file = new File(metaMsg.getPath());
 
-                    // Rechargement automatique de la blacklist si le fichier a été modifié
+                    // Rechargement automatique si fichiers modifies
                     reloadBlacklistIfUpdated();
+                    reloadDurationIfUpdated();
 
                     if (!file.exists()) {
                         logger.log("Erreur : Fichier introuvable " + metaMsg.getPath());
@@ -70,20 +83,36 @@ public class Programme3Uploader {
                         return;
                     }
 
-                    // --- VÉRIFICATION DE LA BLACKLIST ---
-                    if (isBlacklisted(metaMsg)) {
-                        supprimerEtRejeter(file, metaMsg, channel, delivery.getEnvelope().getDeliveryTag());
+                    // --- FILTRE DUREE ---
+                    if (maxDurationSeconds > 0 && metaMsg.getDuration() > maxDurationSeconds) {
+                        logger.log("DUREE DEPASSEE - Morceau ignore : '" + file.getName() + "'"
+                                + " | Duree : " + metaMsg.getDuration() + "s"
+                                + " | Limite : " + maxDurationSeconds + "s"
+                                + " | Fichier CONSERVE sur le disque.");
+                        // Acquittement sans envoi, fichier conserve
+                        channel.basicAck(delivery.getEnvelope().getDeliveryTag(), false);
                         return;
                     }
-                    // ------------------------------------
 
-                    logger.log("Début d'envoi du fichier " + file.getName() +
-                            " [Artiste: " + metaMsg.getArtist() +
-                            ", Genre: " + metaMsg.getGenre() +
-                            ", Langue: " + metaMsg.getLangue() +
-                            ", Date: " + metaMsg.getReleaseDate() + "]");
+                    // --- FILTRE BLACKLIST ---
+                    if (isBlacklisted(metaMsg)) {
+                        logger.log("BLACKLIST - Morceau ignore : '" + file.getName() + "'"
+                                + " | Artiste : " + metaMsg.getArtist()
+                                + " | Genre : " + metaMsg.getGenre()
+                                + " | Fichier CONSERVE sur le disque.");
+                        // Acquittement sans envoi, fichier conserve (NON supprime)
+                        channel.basicAck(delivery.getEnvelope().getDeliveryTag(), false);
+                        return;
+                    }
 
-                    // Construction de la requête multipart
+                    logger.log("Debut d'envoi : " + file.getName()
+                            + " [Artiste: " + metaMsg.getArtist()
+                            + ", Genre: " + metaMsg.getGenre()
+                            + ", Duree: " + metaMsg.getDuration() + "s"
+                            + ", Langue: " + metaMsg.getLangue()
+                            + ", Date: " + metaMsg.getReleaseDate() + "]");
+
+                    // Envoi multipart vers l'API
                     String boundary = "---" + UUID.randomUUID().toString();
                     byte[] body = buildMultipartBody(metaMsg, file, boundary);
 
@@ -96,17 +125,22 @@ public class Programme3Uploader {
                     HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
                     if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                        logger.log("Envoi réussi : " + file.getName());
-                        Files.deleteIfExists(file.toPath());
-                        logger.log(file.getName() + " supprimé du répertoire local.");
+                        logger.log("Envoi reussi : " + file.getName());
+
+                        // Publier dans Queue_Envoi_OK pour que Programme 4 supprime le fichier
+                        String metaJson = gson.toJson(metaMsg);
+                        channel.basicPublish("", RabbitMQUtil.QUEUE_ENVOI_OK, null,
+                                metaJson.getBytes(StandardCharsets.UTF_8));
+                        logger.log("Message publie dans " + RabbitMQUtil.QUEUE_ENVOI_OK + " pour suppression par Programme 4.");
+
                         channel.basicAck(delivery.getEnvelope().getDeliveryTag(), false);
                     } else {
-                        logger.log("Échec de l'envoi : statut HTTP " + response.statusCode());
+                        logger.log("Echec de l'envoi : statut HTTP " + response.statusCode());
                         channel.basicNack(delivery.getEnvelope().getDeliveryTag(), false, true);
                     }
 
                 } catch (Exception e) {
-                    logger.log("Échec de l'envoi : serveur inaccessible ou erreur (" + e.getMessage() + ")");
+                    logger.log("Echec de l'envoi : erreur (" + e.getMessage() + ")");
                     try {
                         channel.basicNack(delivery.getEnvelope().getDeliveryTag(), false, true);
                     } catch (IOException ioException) {
@@ -115,8 +149,7 @@ public class Programme3Uploader {
                 }
             };
 
-            channel.basicConsume(RabbitMQUtil.QUEUE_META_MP3, false, deliverCallback, consumerTag -> {
-            });
+            channel.basicConsume(RabbitMQUtil.QUEUE_META_MP3, false, deliverCallback, consumerTag -> { });
 
         } catch (Exception e) {
             logger.log("Erreur critique : " + e.getMessage());
@@ -125,139 +158,113 @@ public class Programme3Uploader {
     }
 
     // =========================================================================
-    // BLACKLIST
+    // FILTRE DUREE
     // =========================================================================
 
-    /**
-     * Nettoie une chaîne pour la comparaison :
-     * - Met en minuscules
-     * - Supprime les accents via décomposition Unicode
-     * - Supprime les espaces invisibles, caractères de contrôle et non-imprimables
-     * - Trim final
-     */
+    private static void loadDurationLimit() {
+        Path path = Paths.get(DURATION_LIMIT_FILE);
+        if (!Files.exists(path)) {
+            logger.log("Info : Aucun fichier duration_limit.txt trouve. Aucune limite de duree active.");
+            maxDurationSeconds = -1;
+            return;
+        }
+        try {
+            lastDurationLoadTime = Files.getLastModifiedTime(path).toMillis();
+            List<String> lines = Files.readAllLines(path, StandardCharsets.UTF_8);
+            for (String line : lines) {
+                line = line.trim();
+                if (line.startsWith("\uFEFF")) line = line.substring(1).trim();
+                if (line.isEmpty() || line.startsWith("#")) continue;
+                try {
+                    maxDurationSeconds = Long.parseLong(line);
+                    logger.log("Limite de duree chargee : " + maxDurationSeconds + " secondes.");
+                    return;
+                } catch (NumberFormatException e) {
+                    logger.log("Avertissement : valeur non numerique ignoree dans duration_limit.txt : '" + line + "'");
+                }
+            }
+            logger.log("Avertissement : aucune valeur valide dans duration_limit.txt. Pas de limite active.");
+            maxDurationSeconds = -1;
+        } catch (IOException e) {
+            logger.log("Erreur lecture duration_limit.txt : " + e.getMessage());
+            maxDurationSeconds = -1;
+        }
+    }
+
+    private static void reloadDurationIfUpdated() {
+        Path path = Paths.get(DURATION_LIMIT_FILE);
+        if (!Files.exists(path)) return;
+        try {
+            long lastModified = Files.getLastModifiedTime(path).toMillis();
+            if (lastModified > lastDurationLoadTime) {
+                logger.log("Modification detectee sur duration_limit.txt. Rechargement...");
+                loadDurationLimit();
+            }
+        } catch (IOException e) {
+            logger.log("Avertissement : impossible de verifier duration_limit.txt : " + e.getMessage());
+        }
+    }
+
+    // =========================================================================
+    // FILTRE BLACKLIST
+    // =========================================================================
+
     private static String normaliser(String valeur) {
         if (valeur == null) return "";
-        // Décomposition Unicode (NFD) pour séparer les lettres de leurs accents
         String decomposed = Normalizer.normalize(valeur, Normalizer.Form.NFD);
         return decomposed
-                .replaceAll("\\p{M}", "")              // supprime les accents
-                .replaceAll("[\\p{C}\\p{Z}\\s]+", " ") // espaces invisibles et contrôles → espace simple
+                .replaceAll("\\p{M}", "")
+                .replaceAll("[\\p{C}\\p{Z}\\s]+", " ")
                 .trim()
                 .toLowerCase();
     }
 
-    /**
-     * Vérifie si un morceau est blacklisté par genre ou par artiste.
-     * Affiche dans le log les valeurs exactes comparées pour faciliter le débogage.
-     */
     private static boolean isBlacklisted(Mp3MetadataMessage metaMsg) {
         String genre  = normaliser(metaMsg.getGenre());
         String artist = normaliser(metaMsg.getArtist());
 
-        // Log de débogage : valeurs brutes vs normalisées vs contenu de la blacklist
-        logger.log("[DEBUG] Comparaison blacklist :"
+        logger.log("[DEBUG] Blacklist check :"
                 + "\n  genre  brut='" + metaMsg.getGenre() + "' -> normalise='" + genre + "'"
                 + "\n  artist brut='" + metaMsg.getArtist() + "' -> normalise='" + artist + "'"
-                + "\n  genres  blacklistes=" + blacklistedGenres
-                + "\n  artists blacklistes=" + blacklistedArtists);
+                + "\n  genres  BL=" + blacklistedGenres
+                + "\n  artists BL=" + blacklistedArtists);
 
         return blacklistedGenres.contains(genre) || blacklistedArtists.contains(artist);
     }
 
-    /**
-     * Supprime le fichier .mp3 local et acquitte le message RabbitMQ sans envoi à l'API.
-     */
-    private static void supprimerEtRejeter(File file, Mp3MetadataMessage metaMsg,
-                                            Channel channel, long deliveryTag) throws IOException {
-        logger.log("BLACKLIST - Morceau rejeté : '" + file.getName() + "'"
-                + " | Artiste : " + metaMsg.getArtist()
-                + " | Genre : " + metaMsg.getGenre());
-
-        boolean supprime = Files.deleteIfExists(file.toPath());
-
-        if (supprime) {
-            logger.log("Fichier supprimé : " + file.getAbsolutePath());
-        } else {
-            logger.log("Avertissement : le fichier était déjà absent : " + file.getAbsolutePath());
-        }
-
-        // Acquittement : message retiré définitivement de la file, sans envoi à l'API
-        channel.basicAck(deliveryTag, false);
-    }
-
-    /**
-     * Recharge la blacklist uniquement si le fichier a été modifié depuis le dernier chargement.
-     */
-    private static void reloadBlacklistIfUpdated() {
-        Path path = Paths.get(BLACKLIST_FILE);
-        if (!Files.exists(path)) {
-            return;
-        }
-        try {
-            long lastModified = Files.getLastModifiedTime(path).toMillis();
-            if (lastModified > lastBlacklistLoadTime) {
-                logger.log("Modification détectée sur la blacklist. Rechargement...");
-                blacklistedGenres.clear();
-                blacklistedArtists.clear();
-                loadBlacklist();
-            }
-        } catch (IOException e) {
-            logger.log("Avertissement : impossible de vérifier la date de modification de la blacklist : " + e.getMessage());
-        }
-    }
-
-    /**
-     * Charge le fichier de liste noire et remplit les Sets correspondants.
-     * Essaie d'abord UTF-8, puis Windows-1252 (ANSI) en cas d'échec de décodage.
-     */
     private static void loadBlacklist() {
         Path path = Paths.get(BLACKLIST_FILE);
         if (!Files.exists(path)) {
-            logger.log("Info : Aucun fichier blacklist trouvé à : " + BLACKLIST_FILE + ". Aucun filtrage actif.");
+            logger.log("Info : Aucun fichier blacklist.txt trouve. Aucun filtrage actif.");
             return;
         }
-
         List<String> lines = null;
-
-        // Tentative 1 : UTF-8 (encodage recommandé)
         try {
             lastBlacklistLoadTime = Files.getLastModifiedTime(path).toMillis();
             lines = Files.readAllLines(path, StandardCharsets.UTF_8);
             logger.log("Blacklist lue en UTF-8.");
         } catch (IOException e) {
-            logger.log("Lecture UTF-8 échouée, tentative en Windows-1252 (ANSI)...");
+            logger.log("Lecture UTF-8 echouee, tentative Windows-1252...");
         }
-
-        // Tentative 2 : Windows-1252 (Notepad Windows par défaut)
         if (lines == null) {
             try {
                 lines = Files.readAllLines(path, Charset.forName("windows-1252"));
                 logger.log("Blacklist lue en Windows-1252.");
             } catch (IOException e) {
-                logger.log("Erreur lors de la lecture du fichier de blacklist : " + e.getMessage());
+                logger.log("Erreur lecture blacklist : " + e.getMessage());
                 return;
             }
         }
-
+        blacklistedGenres.clear();
+        blacklistedArtists.clear();
         for (String line : lines) {
             line = line.trim();
-
-            // Supprimer le BOM UTF-8 éventuel en début de fichier
-            if (line.startsWith("\uFEFF")) {
-                line = line.substring(1).trim();
-            }
-
-            // Ignorer les commentaires et lignes vides
-            if (line.isEmpty() || line.startsWith("#")) {
-                continue;
-            }
-
+            if (line.startsWith("\uFEFF")) line = line.substring(1).trim();
+            if (line.isEmpty() || line.startsWith("#")) continue;
             if (line.contains("=")) {
                 String[] parts = line.split("=", 2);
                 String type   = parts[0].trim().toUpperCase();
-                // Normaliser aussi les valeurs de la blacklist pour une comparaison cohérente
                 String valeur = normaliser(parts[1]);
-
                 switch (type) {
                     case "GENRE":
                         blacklistedGenres.add(valeur);
@@ -267,15 +274,27 @@ public class Programme3Uploader {
                         blacklistedArtists.add(valeur);
                         break;
                     default:
-                        logger.log("Avertissement : type inconnu ignoré dans la blacklist : '" + type + "'");
-                        break;
+                        logger.log("Avertissement : type inconnu ignore : '" + type + "'");
                 }
             }
         }
+        logger.log("Blacklist chargee : "
+                + blacklistedGenres.size() + " genre(s) : " + blacklistedGenres
+                + " | " + blacklistedArtists.size() + " artiste(s) : " + blacklistedArtists);
+    }
 
-        logger.log("Blacklist chargée : "
-                + blacklistedGenres.size() + " genre(s) bloque(s) : " + blacklistedGenres
-                + " | " + blacklistedArtists.size() + " artiste(s) bloque(s) : " + blacklistedArtists);
+    private static void reloadBlacklistIfUpdated() {
+        Path path = Paths.get(BLACKLIST_FILE);
+        if (!Files.exists(path)) return;
+        try {
+            long lastModified = Files.getLastModifiedTime(path).toMillis();
+            if (lastModified > lastBlacklistLoadTime) {
+                logger.log("Modification detectee sur blacklist.txt. Rechargement...");
+                loadBlacklist();
+            }
+        } catch (IOException e) {
+            logger.log("Avertissement : impossible de verifier blacklist.txt : " + e.getMessage());
+        }
     }
 
     // =========================================================================
@@ -285,14 +304,10 @@ public class Programme3Uploader {
     private static byte[] buildMultipartBody(Mp3MetadataMessage metaMsg, File file, String boundary)
             throws IOException {
         StringBuilder sb = new StringBuilder();
-
-        // Métadonnées en JSON
         sb.append("--").append(boundary).append("\r\n");
         sb.append("Content-Disposition: form-data; name=\"metadata\"\r\n");
         sb.append("Content-Type: application/json\r\n\r\n");
         sb.append(gson.toJson(metaMsg)).append("\r\n");
-
-        // Fichier audio
         sb.append("--").append(boundary).append("\r\n");
         sb.append("Content-Disposition: form-data; name=\"audio\"; filename=\"").append(file.getName()).append("\"\r\n");
         sb.append("Content-Type: audio/mpeg\r\n\r\n");
@@ -305,7 +320,6 @@ public class Programme3Uploader {
         System.arraycopy(headerBytes, 0, body, 0, headerBytes.length);
         System.arraycopy(fileBytes,   0, body, headerBytes.length, fileBytes.length);
         System.arraycopy(footerBytes, 0, body, headerBytes.length + fileBytes.length, footerBytes.length);
-
         return body;
     }
 }

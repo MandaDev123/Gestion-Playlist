@@ -8,7 +8,8 @@ import java.util.concurrent.TimeoutException;
 
 public class RabbitMQUtil {
     public static final String QUEUE_NOUVEAUX_MP3 = "Queue_Nouveaux_MP3";
-    public static final String QUEUE_META_MP3 = "Queue_Meta_MP3";
+    public static final String QUEUE_META_MP3     = "Queue_Meta_MP3";
+    public static final String QUEUE_ENVOI_OK     = "Queue_Envoi_OK";   // Nouvelle file
 
     public static Connection createConnection() throws IOException, TimeoutException {
         ConnectionFactory factory = new ConnectionFactory();
@@ -20,11 +21,12 @@ public class RabbitMQUtil {
     }
 
     public static void declareQueues(Channel channel) throws IOException {
-        boolean durable = true; // Conserver les files après redémarrage
-        boolean exclusive = false;
+        boolean durable    = true;
+        boolean exclusive  = false;
         boolean autoDelete = false;
 
         channel.queueDeclare(QUEUE_NOUVEAUX_MP3, durable, exclusive, autoDelete, null);
-        channel.queueDeclare(QUEUE_META_MP3, durable, exclusive, autoDelete, null);
+        channel.queueDeclare(QUEUE_META_MP3,     durable, exclusive, autoDelete, null);
+        channel.queueDeclare(QUEUE_ENVOI_OK,     durable, exclusive, autoDelete, null);
     }
 }
