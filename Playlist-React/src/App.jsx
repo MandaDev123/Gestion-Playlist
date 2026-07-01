@@ -1,10 +1,12 @@
 import { useState, useContext } from 'react';
 import { AudioProvider, AudioContext } from './context/AudioContext';
+import { AuthProvider, AuthContext } from './context/AuthContext';
 import Library from './views/Library';
 import PlaylistGenerator from './views/PlaylistGenerator';
 import MyPlaylists from './views/MyPlaylists';
 import EditSong from './views/EditSong';
 import AudioPlayer from './components/AudioPlayer';
+import Login from './views/Login';
 
 function AppContent() {
   const [currentTab, setCurrentTab] = useState('library');
@@ -12,6 +14,9 @@ function AppContent() {
   
   // Récupération de l'état global du lecteur audio
   const { currentSong } = useContext(AudioContext);
+
+  // Récupération de l'utilisateur connecté et de la fonction de déconnexion
+  const { user, logout } = useContext(AuthContext);
 
   // Fonction pour ouvrir la page d'édition d'un morceau
   const openEditPage = (id) => {
@@ -71,6 +76,14 @@ function AppContent() {
         </nav>
 
         <div style={styles.sidebarFooter}>
+          {user && (
+            <div style={styles.userBlock}>
+              <span style={styles.userName}>👤 {user.username}</span>
+              <button onClick={logout} style={styles.logoutBtn} title="Se déconnecter">
+                🚪 Déconnexion
+              </button>
+            </div>
+          )}
           <p style={styles.footerText}>Version Pro v1.0</p>
         </div>
       </aside>
@@ -121,8 +134,23 @@ function AppContent() {
   );
 }
 
-// Composant racine pour envelopper l'application dans l'AudioProvider
-function App() {
+// Composant qui décide d'afficher la page de connexion ou l'application
+function AuthGate() {
+  const { user, loading } = useContext(AuthContext);
+
+  if (loading) {
+    // Petite attente pendant la vérification de la session existante (token en localStorage)
+    return (
+      <div style={styles.loadingScreen}>
+        <p style={styles.loadingText}>Chargement...</p>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Login />;
+  }
+
   return (
     <AudioProvider>
       <AppContent />
@@ -130,8 +158,27 @@ function App() {
   );
 }
 
+// Composant racine pour envelopper l'application dans l'AuthProvider
+function App() {
+  return (
+    <AuthProvider>
+      <AuthGate />
+    </AuthProvider>
+  );
+}
+
 /* STRUCTURE DES STYLES ULTRA-STRICTE */
 const styles = {
+  loadingScreen: {
+    width: '100vw',
+    height: '100vh',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#0a0b0d',
+    color: '#9ca3af',
+    fontFamily: '"Inter", "Segoe UI", sans-serif',
+  },
   appContainer: {
     fontFamily: '"Inter", "Segoe UI", sans-serif',
     backgroundColor: '#0a0b0d', 
@@ -213,6 +260,31 @@ const styles = {
   sidebarFooter: {
     paddingTop: '20px',
     borderTop: '1px solid #1f2430',
+  },
+  userBlock: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+    marginBottom: '12px',
+  },
+  userName: {
+    fontSize: '13px',
+    color: '#e5e7eb',
+    fontWeight: '600',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  logoutBtn: {
+    background: 'transparent',
+    border: '1px solid #1f2430',
+    color: '#9ca3af',
+    padding: '8px 12px',
+    borderRadius: '8px',
+    fontSize: '12px',
+    fontWeight: '600',
+    cursor: 'pointer',
+    textAlign: 'left',
   },
   footerText: {
     fontSize: '11px',
